@@ -14,6 +14,7 @@ Invio email massivo con interfaccia grafica WYSIWYG (PyQt5).
 - 📂 Scelta della directory di lavoro (log, config, CSV)
 - 💾 Salvataggio configurazione SMTP su file JSON
 - 📊 Log e CSV con traccia di ogni invio
+- 📂 Gestione dello storico dei messaggi inviati insieme agli allegati
 
 ## Installazione
 
