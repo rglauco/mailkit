@@ -21,9 +21,10 @@ from html.parser import HTMLParser
 import re
 
 # ================= LOCKED SMTP PASS =================
-# Impostare _SMTP_PASS_LOCKED = True nella versione da distribuire ai colleghi.
-# La password non apparirà nell'UI e non verrà salvata su disco.
-_SMTP_PASS_LOCKED = True
+# La modalità "locked" si attiva automaticamente se smtp.key è presente
+# accanto all'eseguibile. Nessuna modifica al sorgente richiesta:
+#   - distribuzione ai colleghi → mailkit.exe + smtp.key  (password nascosta)
+#   - uso personale            → mailkit.exe solo          (password visibile)
 
 # Frammenti del segreto — non contigui e non leggibili con `strings`
 _F1 = b"\x6d\x4b\x39\x23\x6e\x50\x32"
@@ -32,9 +33,18 @@ _F3 = b"\x72\x4a\x35\x21\x62\x57\x38"
 # Salt fisso (16 byte pseudocasuali)
 _KS = b"\x7a\x3f\x91\xb2\x44\xc8\x0d\x56\xe1\x28\x9a\x7c\x3b\xf4\x82\x15"
 
-# Token Fernet — generare con: python genera_smtp_key.py
-# Sostituire questa stringa con l'output dello script prima di compilare con PyInstaller
-_SMTP_ENC: bytes = b'gAAAAABqBtE4NPLuscDq-UzEhUzkZN-cEh8KN8uhVVk3t64bNHNFGAiCz_-5M_Q60IBYmU_gSVAruRNq_2cXkdL1jLk2TUaVdA=='
+
+def _smtp_key_path() -> str:
+    """Percorso di smtp.key — accanto all'exe (frozen) o allo script (dev)."""
+    if getattr(sys, "frozen", False):
+        base = os.path.dirname(sys.executable)
+    else:
+        base = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(base, "smtp.key")
+
+
+# True se smtp.key esiste accanto all'eseguibile (valutato una volta all'avvio)
+_SMTP_PASS_LOCKED: bool = os.path.exists(_smtp_key_path())
 
 
 def _derive_key() -> bytes:
@@ -45,12 +55,18 @@ def _derive_key() -> bytes:
 
 
 def _get_locked_smtp_pass() -> str:
-    if not _SMTP_ENC:
-        raise RuntimeError("Token SMTP non configurato. Esegui genera_smtp_key.py.")
+    """Legge smtp.key e decifra la password SMTP."""
     try:
-        return Fernet(_derive_key()).decrypt(_SMTP_ENC).decode()
+        with open(_smtp_key_path(), "rb") as f:
+            token = f.read().strip()
+        return Fernet(_derive_key()).decrypt(token).decode()
+    except FileNotFoundError:
+        raise RuntimeError("smtp.key non trovato accanto all'eseguibile.")
     except InvalidToken:
-        raise RuntimeError("Token SMTP corrotto o chiave non corrispondente.")
+        raise RuntimeError(
+            "smtp.key non valido o corrotto.\n"
+            "Rigenerare il file con genera_smtp_key.py."
+        )
 
 
 # ================= CONFIG DEFAULTS =================
@@ -1012,12 +1028,21 @@ class MailSenderGUI(QWidget):
             QMessageBox.warning(self, "Attenzione", "Inserisci almeno un destinatario.")
             return
 
+        if _SMTP_PASS_LOCKED:
+            try:
+                smtp_pass = _get_locked_smtp_pass()
+            except RuntimeError as e:
+                QMessageBox.critical(self, "Errore credenziali SMTP", str(e))
+                return
+        else:
+            smtp_pass = self.smtp_pass_input.text()
+
         smtp_config = {
             "server": self.smtp_server_input.text().strip(),
             "port": self.smtp_port_input.value(),
             "user": self.smtp_user_input.text().strip(),
             "sender_name": self.smtp_sender_name_input.text().strip(),
-            "password": _get_locked_smtp_pass() if _SMTP_PASS_LOCKED else self.smtp_pass_input.text(),
+            "password": smtp_pass,
             "max_retries": self.max_retries_input.value(),
             "base_delay": self.base_delay_slider.value() / 1000.0,
             "sleep_between": self.sleep_between_slider.value() / 1000.0,
