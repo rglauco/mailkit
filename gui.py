@@ -1,4 +1,4 @@
-import sys, os, smtplib, ssl, csv, time, json, base64
+import sys, os, smtplib, ssl, csv, time, json, base64, shutil
 from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.hazmat.primitives import hashes
@@ -632,11 +632,35 @@ class MailSenderGUI(QWidget):
         # Aggiorna lo stato dei pulsanti quando il cursore si muove
         self.body_edit.currentCharFormatChanged.connect(self._update_format_buttons)
 
+        # ===================== TAB STORICO =====================
+        history_tab = QWidget()
+        history_layout = QVBoxLayout(history_tab)
+
+        self.history_list = QListWidget()
+        self.history_list.setFont(QFont("Segoe UI", 11))
+        self.history_list.itemDoubleClicked.connect(self._load_history_entry)
+        history_layout.addWidget(self.history_list)
+
+        history_btn_layout = QHBoxLayout()
+        load_history_btn = QPushButton("📂 Carica in Invio")
+        load_history_btn.setFont(QFont("Segoe UI", 11))
+        load_history_btn.clicked.connect(self._load_history_entry)
+        history_btn_layout.addWidget(load_history_btn)
+
+        delete_history_btn = QPushButton("🗑 Elimina voce")
+        delete_history_btn.setFont(QFont("Segoe UI", 11))
+        delete_history_btn.clicked.connect(self._delete_history_entry)
+        history_btn_layout.addWidget(delete_history_btn)
+        history_layout.addLayout(history_btn_layout)
+
         # ===== Assembla tab =====
         self.tabs.addTab(config_tab, "⚙️ Configurazione")
         self.tabs.addTab(send_tab, "📧 Invio")
+        self.tabs.addTab(history_tab, "📋 Storico")
         main_layout.addWidget(self.tabs)
 
+        self._history_data = []
+        self._load_history_list()
         self.setLayout(main_layout)
 
     # ===== Gestione directory di lavoro =====
@@ -686,6 +710,8 @@ class MailSenderGUI(QWidget):
         self.LOG_FILE = os.path.join(self.log_dir, "mail_gui.log")
         self.CSV_FILE = os.path.join(self.log_dir, "mail_gui.csv")
         self.CONFIG_FILE = os.path.join(self.log_dir, "smtp_config.json")
+        self.HISTORY_FILE = os.path.join(self.log_dir, "storico.json")
+        self.HISTORY_ATTACH_DIR = os.path.join(self.log_dir, "storico_allegati")
 
         # CSV header
         if not os.path.exists(self.CSV_FILE):
@@ -719,15 +745,18 @@ class MailSenderGUI(QWidget):
 
         if reply == QMessageBox.Yes:
             # Copia i file nella nuova directory
-            import shutil
             os.makedirs(new_dir, exist_ok=True)
-            for fname in ("mail_gui.log", "mail_gui.csv", "smtp_config.json"):
+            for fname in ("mail_gui.log", "mail_gui.csv", "smtp_config.json", "storico.json"):
                 src = os.path.join(self.log_dir, fname)
                 if os.path.exists(src):
                     dst = os.path.join(new_dir, fname)
-                    # Non sovrascrivere se già esiste nella nuova dir
                     if not os.path.exists(dst):
                         shutil.copy2(src, dst)
+            # Copia la cartella degli allegati storici
+            src_attach = os.path.join(self.log_dir, "storico_allegati")
+            dst_attach = os.path.join(new_dir, "storico_allegati")
+            if os.path.isdir(src_attach) and not os.path.exists(dst_attach):
+                shutil.copytree(src_attach, dst_attach)
 
         # Aggiorna la directory
         old_dir = self.log_dir
@@ -744,6 +773,9 @@ class MailSenderGUI(QWidget):
         # Ricarica la configurazione SMTP nei campi
         config = load_config(self.CONFIG_FILE)
         self._fill_smtp_fields(config)
+
+        # Ricarica lo storico dalla nuova cartella
+        self._load_history_list()
 
         self.log(f"Cartella di lavoro cambiata: {old_dir} → {self.log_dir}")
 
@@ -1028,6 +1060,9 @@ class MailSenderGUI(QWidget):
             QMessageBox.warning(self, "Attenzione", "Inserisci almeno un destinatario.")
             return
 
+        if not self._check_files_accessible():
+            return
+
         if _SMTP_PASS_LOCKED:
             try:
                 smtp_pass = _get_locked_smtp_pass()
@@ -1055,6 +1090,8 @@ class MailSenderGUI(QWidget):
             QMessageBox.warning(self, "Attenzione", "Compila Server SMTP e Utente nella configurazione.")
             return
 
+        self._save_to_history(subject, body_html, self.attachments)
+
         self.send_button.setEnabled(False)
         self.stop_button.setEnabled(True)
 
@@ -1062,6 +1099,132 @@ class MailSenderGUI(QWidget):
         self.thread.log_signal.connect(self.log)
         self.thread.finished_signal.connect(self._on_sending_finished)
         self.thread.start()
+
+    # ===== Check file accessibili =====
+    def _check_files_accessible(self) -> bool:
+        """Verifica che CSV e log non siano bloccati da altri processi."""
+        for path, label in [(self.CSV_FILE, "CSV dei log"), (self.LOG_FILE, "file di log")]:
+            if os.path.exists(path):
+                try:
+                    with open(path, "a", encoding="utf-8"):
+                        pass
+                except PermissionError:
+                    QMessageBox.warning(
+                        self, "File in uso",
+                        f"Il {label} è aperto da un altro programma e non è accessibile:\n\n"
+                        f"{path}\n\n"
+                        f"Chiuderlo (es. Excel) e riprovare."
+                    )
+                    return False
+        return True
+
+    # ===== Storico invii =====
+    def _save_to_history(self, subject: str, body_html: str, attachments: list):
+        """Salva oggetto, corpo e allegati nello storico al momento dell'invio."""
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        ts_dir = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+
+        saved_attachments = []
+        if attachments:
+            attach_dir = os.path.join(self.HISTORY_ATTACH_DIR, ts_dir)
+            os.makedirs(attach_dir, exist_ok=True)
+            for src in attachments:
+                if os.path.exists(src):
+                    dst = os.path.join(attach_dir, os.path.basename(src))
+                    shutil.copy2(src, dst)
+                    saved_attachments.append(dst)
+
+        entry = {
+            "timestamp": ts,
+            "subject": subject,
+            "body_html": body_html,
+            "attachments": saved_attachments,
+        }
+
+        history = []
+        if os.path.exists(self.HISTORY_FILE):
+            try:
+                with open(self.HISTORY_FILE, "r", encoding="utf-8") as f:
+                    history = json.load(f)
+            except Exception:
+                history = []
+
+        history.insert(0, entry)
+
+        with open(self.HISTORY_FILE, "w", encoding="utf-8") as f:
+            json.dump(history, f, indent=2, ensure_ascii=False)
+
+        self._load_history_list()
+
+    def _load_history_list(self):
+        """Popola la lista dello storico dalla cartella di lavoro corrente."""
+        self.history_list.clear()
+        self._history_data = []
+        if not os.path.exists(self.HISTORY_FILE):
+            return
+        try:
+            with open(self.HISTORY_FILE, "r", encoding="utf-8") as f:
+                self._history_data = json.load(f)
+        except Exception:
+            self._history_data = []
+        for entry in self._history_data:
+            ts = entry.get("timestamp", "")
+            subj = entry.get("subject", "(senza oggetto)")
+            n_att = len(entry.get("attachments", []))
+            label = f"{ts}  —  {subj}"
+            if n_att:
+                label += f"  [{n_att} allegato/i]"
+            self.history_list.addItem(label)
+
+    def _load_history_entry(self):
+        """Carica la voce selezionata nel tab Invio."""
+        row = self.history_list.currentRow()
+        if row < 0 or row >= len(self._history_data):
+            return
+        entry = self._history_data[row]
+
+        self.subject_entry.setText(entry.get("subject", ""))
+        self.body_edit.setHtml(entry.get("body_html", ""))
+
+        self.attachments.clear()
+        self.attach_list.clear()
+        missing = []
+        for path in entry.get("attachments", []):
+            if os.path.exists(path):
+                self.attachments.append(path)
+                self.attach_list.addItem(os.path.basename(path))
+            else:
+                missing.append(os.path.basename(path))
+
+        if missing:
+            QMessageBox.warning(
+                self, "Allegati mancanti",
+                "Alcuni allegati salvati non sono più reperibili e sono stati ignorati:\n\n"
+                + "\n".join(missing)
+            )
+
+        self.tabs.setCurrentIndex(1)
+
+    def _delete_history_entry(self):
+        """Elimina la voce selezionata dallo storico (non cancella gli allegati)."""
+        row = self.history_list.currentRow()
+        if row < 0:
+            QMessageBox.information(self, "Storico", "Seleziona una voce da eliminare.")
+            return
+        entry = self._history_data[row]
+        ts = entry.get("timestamp", "")
+        subj = entry.get("subject", "(senza oggetto)")
+        reply = QMessageBox.question(
+            self, "Conferma eliminazione",
+            f"Eliminare la voce dallo storico?\n\n{ts}  —  {subj}",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+        )
+        if reply != QMessageBox.Yes:
+            return
+        self._history_data.pop(row)
+        with open(self.HISTORY_FILE, "w", encoding="utf-8") as f:
+            json.dump(self._history_data, f, indent=2, ensure_ascii=False)
+        self._load_history_list()
 
     def _stop_sending(self):
         """Richiede l'interruzione dell'invio email."""
