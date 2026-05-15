@@ -1,5 +1,24 @@
 # Changelog
 
+## [1.5.0] - 2026-05-15
+
+### Added
+
+- **Check pre-invio sui file di log**: prima di avviare il thread di invio, `_check_files_accessible()` verifica che CSV e log non siano bloccati da altri processi (es. Excel aperto sul file CSV). Se un file non è accessibile, viene mostrato un `QMessageBox.warning` con il percorso esatto del file da chiudere; l'invio non parte finché il problema non è risolto.
+- **Tab "📋 Storico"** (terza tab): conserva uno storico degli invii con oggetto, corpo HTML e allegati.
+  - Al click su **"📧 Invia Email"** viene salvata automaticamente una voce in `storico.json` con timestamp, oggetto, HTML del corpo e percorsi degli allegati; gli allegati vengono copiati nella sottocartella `storico_allegati/YYYY-MM-DD_HH-MM-SS/` nella directory di lavoro.
+  - Le voci sono elencate dalla più recente, con oggetto, timestamp e numero di allegati.
+  - **Doppio click** o pulsante **"📂 Carica in Invio"** ripristina oggetto, corpo e allegati nel tab Invio e porta l'utente su quel tab.
+  - Se un allegato salvato non è più reperibile sul disco al momento del caricamento, viene mostrato un avviso con l'elenco dei file mancanti; gli allegati ancora presenti vengono caricati normalmente.
+  - Pulsante **"🗑 Elimina voce"**: rimuove la voce dallo storico con conferma; gli allegati copiati rimangono su disco.
+  - `storico.json` e `storico_allegati/` vengono migrati insieme agli altri file quando si cambia la cartella di lavoro.
+- `shutil` portato a import di modulo (era importato localmente dentro `_change_work_dir`)
+
+### Changed
+
+- `_change_work_dir` copia anche `storico.json` e l'intera cartella `storico_allegati/` durante la migrazione della directory di lavoro, e ricarica la lista dello storico dopo il cambio.
+- `_setup_work_dir` inizializza i percorsi `HISTORY_FILE` e `HISTORY_ATTACH_DIR` come attributi d'istanza.
+
 ## [1.4.0] - 2026-05-15 — branch `distribuisci`
 
 ### Added
