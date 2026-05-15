@@ -1,5 +1,34 @@
 # Changelog
 
+## [1.4.0] - 2026-05-15 — branch `distribuisci`
+
+### Added
+
+- **Modalità "locked" per la distribuzione ai colleghi**: la password SMTP non è mai visibile nell'UI né salvata su disco. Si attiva automaticamente in base alla presenza del file `smtp.key` accanto all'eseguibile; nessuna modifica al sorgente o ricompilazione necessaria per passare da una modalità all'altra.
+  - Con `smtp.key` presente → modalità locked: campo password nascosto, password decifrata dal file al momento dell'invio
+  - Senza `smtp.key` → modalità normale: campo password visibile e modificabile, comportamento invariato rispetto alle versioni precedenti
+- **Cifratura AES-256 della password con autenticazione** tramite `cryptography.fernet` (AES-128-CBC + HMAC-SHA256):
+  - La chiave non è mai presente in chiaro nel binario: è derivata da tre frammenti di byte non contigui (`_F1`, `_F2`, `_F3`) via **PBKDF2HMAC-SHA256 con 600.000 iterazioni**
+  - Il token Fernet include un MAC che rileva qualsiasi alterazione del file (`InvalidToken` se `smtp.key` è corrotto o manomesso)
+- **Script `genera_smtp_key.py`** (solo per l'amministratore, non da distribuire):
+  - Deriva la stessa chiave presente nell'exe, cifra la password SMTP e scrive `smtp.key` nella stessa cartella
+  - Include conferma password e verifica immediata della decifratura prima di scrivere il file
+  - Permette di aggiornare la password distribuendo solo il nuovo `smtp.key`, senza ricompilare l'exe
+- **Gestione errori credenziali nell'UI**: se `smtp.key` è assente o corrotto al momento dell'invio, viene mostrato un `QMessageBox.critical` con messaggio descrittivo invece di un crash silenzioso
+- `cryptography>=42.0` aggiunto a `requirements.txt`
+
+### Changed
+
+- `_SMTP_PASS_LOCKED` è ora una variabile booleana calcolata a runtime (`os.path.exists(smtp.key)`) invece di un flag hardcoded nel sorgente
+- `_get_locked_smtp_pass()` legge il token da `smtp.key` su disco invece di decifrare una costante embedded nel sorgente; il percorso è risolto correttamente sia in modalità sviluppo (`.py`) che compilata (PyInstaller `sys.frozen`)
+- `_save_smtp_config()` scrive `smtp_pass: ""` nel JSON quando la modalità locked è attiva, così la password reale non compare mai in `smtp_config.json` sul disco del collega
+- `send_emails()` recupera la password tramite `_get_locked_smtp_pass()` con gestione esplicita di `RuntimeError`
+
+### Security
+
+- **Prima (base64)**: la password era codificata in chiaro nel bytecode; `pyinstxtractor` + `uncompyle6` la esponeva in pochi secondi senza competenze specifiche.
+- **Ora (Fernet + PBKDF2)**: la password non compare mai come stringa leggibile nel binario. Per recuperarla occorre: decompilare il bytecode, identificare i tre frammenti del segreto, ricostruire la derivazione PBKDF2 a 600k iterazioni ed eseguirla. Protezione adeguata contro analisi superficiali e strumenti automatici; non garantita contro un reverse engineer esperto con accesso prolungato al binario.
+
 ## [1.3.0] - 2026-04-29
 
 ### Added
