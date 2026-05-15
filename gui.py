@@ -1,4 +1,4 @@
-import sys, os, smtplib, ssl, csv, time, json
+import sys, os, smtplib, ssl, csv, time, json, base64
 from datetime import datetime
 from PyQt5 import QtWidgets, QtGui
 from PyQt5.QtWidgets import (QFileDialog, QMessageBox, QTextEdit, QLineEdit, QLabel,
@@ -16,6 +16,19 @@ from email.mime.application import MIMEApplication
 from email.utils import formatdate, make_msgid
 from html.parser import HTMLParser
 import re
+
+# ================= LOCKED SMTP PASS =================
+# Impostare _SMTP_PASS_LOCKED = True nella versione da distribuire ai colleghi.
+# La password non apparirà nell'UI e non verrà salvata su disco.
+_SMTP_PASS_LOCKED = True
+
+# Generare con: base64.b64encode(b"la_password").decode()
+_SMTP_PASS_B64 = "QXF1aWxhMjAyMA=="
+
+
+def _get_locked_smtp_pass() -> str:
+    return base64.b64decode(_SMTP_PASS_B64).decode()
+
 
 # ================= CONFIG DEFAULTS =================
 DEFAULT_CONFIG = {
@@ -437,7 +450,8 @@ class MailSenderGUI(QWidget):
 
         self.smtp_pass_input = QLineEdit(config["smtp_pass"])
         self.smtp_pass_input.setEchoMode(QLineEdit.Password)
-        smtp_form.addRow("Password:", self.smtp_pass_input)
+        if not _SMTP_PASS_LOCKED:
+            smtp_form.addRow("Password:", self.smtp_pass_input)
 
         self.max_retries_input = QSpinBox()
         self.max_retries_input.setRange(0, 20)
@@ -700,7 +714,8 @@ class MailSenderGUI(QWidget):
         self.smtp_port_input.setValue(config["smtp_port"])
         self.smtp_user_input.setText(config["smtp_user"])
         self.smtp_sender_name_input.setText(config.get("smtp_sender_name", ""))
-        self.smtp_pass_input.setText(config["smtp_pass"])
+        if not _SMTP_PASS_LOCKED:
+            self.smtp_pass_input.setText(config["smtp_pass"])
         self.max_retries_input.setValue(config["max_retries"])
         self.reconnect_every_input.setValue(config.get("reconnect_every", 100))
         self.batch_size_input.setValue(config.get("batch_size", 0))
@@ -885,7 +900,7 @@ class MailSenderGUI(QWidget):
             "smtp_server": self.smtp_server_input.text().strip(),
             "smtp_port": self.smtp_port_input.value(),
             "smtp_user": self.smtp_user_input.text().strip(),
-            "smtp_pass": self.smtp_pass_input.text(),
+            "smtp_pass": "" if _SMTP_PASS_LOCKED else self.smtp_pass_input.text(),
             "smtp_sender_name": self.smtp_sender_name_input.text().strip(),
             "max_retries": self.max_retries_input.value(),
             "base_delay": self.base_delay_slider.value() / 1000.0,
@@ -979,7 +994,7 @@ class MailSenderGUI(QWidget):
             "port": self.smtp_port_input.value(),
             "user": self.smtp_user_input.text().strip(),
             "sender_name": self.smtp_sender_name_input.text().strip(),
-            "password": self.smtp_pass_input.text(),
+            "password": _get_locked_smtp_pass() if _SMTP_PASS_LOCKED else self.smtp_pass_input.text(),
             "max_retries": self.max_retries_input.value(),
             "base_delay": self.base_delay_slider.value() / 1000.0,
             "sleep_between": self.sleep_between_slider.value() / 1000.0,
