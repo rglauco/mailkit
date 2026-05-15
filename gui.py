@@ -1,4 +1,7 @@
 import sys, os, smtplib, ssl, csv, time, json, base64
+from cryptography.fernet import Fernet, InvalidToken
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+from cryptography.hazmat.primitives import hashes
 from datetime import datetime
 from PyQt5 import QtWidgets, QtGui
 from PyQt5.QtWidgets import (QFileDialog, QMessageBox, QTextEdit, QLineEdit, QLabel,
@@ -22,12 +25,32 @@ import re
 # La password non apparirà nell'UI e non verrà salvata su disco.
 _SMTP_PASS_LOCKED = True
 
-# Generare con: base64.b64encode(b"la_password").decode()
-_SMTP_PASS_B64 = "QXF1aWxhMjAyMA=="
+# Frammenti del segreto — non contigui e non leggibili con `strings`
+_F1 = b"\x6d\x4b\x39\x23\x6e\x50\x32"
+_F2 = b"\x78\x51\x37\x40\x76\x4c\x34"
+_F3 = b"\x72\x4a\x35\x21\x62\x57\x38"
+# Salt fisso (16 byte pseudocasuali)
+_KS = b"\x7a\x3f\x91\xb2\x44\xc8\x0d\x56\xe1\x28\x9a\x7c\x3b\xf4\x82\x15"
+
+# Token Fernet — generare con: python genera_smtp_key.py
+# Sostituire questa stringa con l'output dello script prima di compilare con PyInstaller
+_SMTP_ENC: bytes = b'gAAAAABqBtE4NPLuscDq-UzEhUzkZN-cEh8KN8uhVVk3t64bNHNFGAiCz_-5M_Q60IBYmU_gSVAruRNq_2cXkdL1jLk2TUaVdA=='
+
+
+def _derive_key() -> bytes:
+    """Deriva la chiave AES dal segreto frammentato via PBKDF2 (600k iter)."""
+    secret = _F1 + _F2 + _F3
+    kdf = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32, salt=_KS, iterations=600_000)
+    return base64.urlsafe_b64encode(kdf.derive(secret))
 
 
 def _get_locked_smtp_pass() -> str:
-    return base64.b64decode(_SMTP_PASS_B64).decode()
+    if not _SMTP_ENC:
+        raise RuntimeError("Token SMTP non configurato. Esegui genera_smtp_key.py.")
+    try:
+        return Fernet(_derive_key()).decrypt(_SMTP_ENC).decode()
+    except InvalidToken:
+        raise RuntimeError("Token SMTP corrotto o chiave non corrispondente.")
 
 
 # ================= CONFIG DEFAULTS =================
