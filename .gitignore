@@ -3,7 +3,6 @@ __pycache__/
 *.py[cod]
 *$py.class
 *.key
-genera_smtp_key.py
 _secret.py
 # C extensions
 *.so
