@@ -1,5 +1,29 @@
 # Changelog
 
+## [1.6.1] - 2026-05-17
+
+### Added
+
+- **Cifratura della password nel JSON di configurazione**: `smtp_pass` viene ora salvata cifrata con AES-256 (Fernet) in `smtp_config.json`. La decifratura avviene automaticamente al caricamento; i file di config esistenti con password in chiaro continuano a funzionare senza intervento (retrocompatibilità garantita tramite prefisso `enc:`).
+- **Segreto di build personalizzabile per la modalità locked**: gli amministratori possono ora differenziare il segreto usato per cifrare `smtp.key` rispetto alla chiave default pubblica, rendendo la build specifica dell'organizzazione.
+  - Nuovo script **`build_env.py`**: legge `MAILKIT_SECRET` da `.env` o variabile d'ambiente, deriva i frammenti di chiave via PBKDF2 e genera `_secret.py` da includere nella build.
+  - `_secret.py` viene importato automaticamente da `gui.py` e `genera_smtp_key.py`; se assente, si usa il segreto default (comportamento invariato rispetto alle versioni precedenti).
+  - `genera_smtp_key.py` aggiornato per importare i frammenti da `_secret.py` con fallback al default.
+- **Supporto GitHub Actions per build admin con segreto custom**: il workflow `build.yml` esegue `build_env.py` prima di PyInstaller se il secret `MAILKIT_SECRET` è configurato nel repository.
+- `_secret.py` aggiunto a `.gitignore`.
+
+### Changed
+
+- `_derive_key()` usa ora i frammenti di `_secret.py` (se disponibili) invece dei frammenti hardcoded, per generare la chiave di `smtp.key` nelle build admin.
+- Aggiunta `_derive_config_key()`: chiave separata, sempre derivata dai frammenti default (100k iterazioni PBKDF2, risultato cachato), usata esclusivamente per cifrare `smtp_pass` nel JSON.
+- `save_config()` cifra `smtp_pass` prima di scrivere su disco (solo in modalità non-locked).
+- `load_config()` decifra `smtp_pass` se il valore inizia con `enc:`.
+
+### Security
+
+- La password SMTP dell'utente non è mai in chiaro su disco, né in modalità personale (JSON cifrato) né in modalità locked (JSON vuoto, password in `smtp.key`).
+- Il segreto di build admin è ora separato dal segreto default distribuito pubblicamente con il sorgente: una build dell'organizzazione non può essere decifrata con strumenti derivati dal codice pubblico.
+
 ## [1.5.0] - 2026-05-15
 
 ### Added

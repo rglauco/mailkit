@@ -25,6 +25,12 @@ jobs:
           pip install pyinstaller
           pip install -r requirements.txt
 
+      - name: Generate build secret
+        if: ${{ secrets.MAILKIT_SECRET != '' }}
+        run: python build_env.py
+        env:
+          MAILKIT_SECRET: ${{ secrets.MAILKIT_SECRET }}
+
       - name: Build exe
         run: pyinstaller gui.spec
 

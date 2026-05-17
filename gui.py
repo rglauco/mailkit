@@ -26,16 +26,23 @@ import re
 #   - distribuzione ai colleghi → mailkit.exe + smtp.key  (password nascosta)
 #   - uso personale            → mailkit.exe solo          (password visibile)
 
-# Frammenti del segreto — non contigui e non leggibili con `strings`
+# Frammenti default — usati anche per cifrare smtp_pass nel JSON di config.
+# NON modificare: la config JSON di tutti gli utenti dipende da questi valori.
 _F1 = b"\x6d\x4b\x39\x23\x6e\x50\x32"
 _F2 = b"\x78\x51\x37\x40\x76\x4c\x34"
 _F3 = b"\x72\x4a\x35\x21\x62\x57\x38"
-# Salt fisso (16 byte pseudocasuali)
 _KS = b"\x7a\x3f\x91\xb2\x44\xc8\x0d\x56\xe1\x28\x9a\x7c\x3b\xf4\x82\x15"
+
+# Frammenti di build — sovrascrivono i default per smtp.key nelle build admin.
+# Generati da build_env.py leggendo MAILKIT_SECRET dal file .env.
+try:
+    import _secret as _s
+    _SF1, _SF2, _SF3, _SKS = _s._F1, _s._F2, _s._F3, _s._KS
+except ImportError:
+    _SF1, _SF2, _SF3, _SKS = _F1, _F2, _F3, _KS
 
 
 def _smtp_key_path() -> str:
-    """Percorso di smtp.key — accanto all'exe (frozen) o allo script (dev)."""
     if getattr(sys, "frozen", False):
         base = os.path.dirname(sys.executable)
     else:
@@ -48,10 +55,23 @@ _SMTP_PASS_LOCKED: bool = os.path.exists(_smtp_key_path())
 
 
 def _derive_key() -> bytes:
-    """Deriva la chiave AES dal segreto frammentato via PBKDF2 (600k iter)."""
-    secret = _F1 + _F2 + _F3
-    kdf = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32, salt=_KS, iterations=600_000)
+    """Chiave per smtp.key — usa il segreto di build (custom o default)."""
+    secret = _SF1 + _SF2 + _SF3
+    kdf = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32, salt=_SKS, iterations=600_000)
     return base64.urlsafe_b64encode(kdf.derive(secret))
+
+
+_config_key_cache: bytes = b""
+
+
+def _derive_config_key() -> bytes:
+    """Chiave per cifrare smtp_pass nel JSON — sempre default, derivata una volta."""
+    global _config_key_cache
+    if not _config_key_cache:
+        secret = _F1 + _F2 + _F3
+        kdf = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32, salt=_KS, iterations=100_000)
+        _config_key_cache = base64.urlsafe_b64encode(kdf.derive(secret))
+    return _config_key_cache
 
 
 def _get_locked_smtp_pass() -> str:
@@ -85,12 +105,30 @@ DEFAULT_CONFIG = {
 }
 
 
+_ENC_PREFIX = "enc:"
+
+
+def _encrypt_pass(plaintext: str) -> str:
+    return _ENC_PREFIX + Fernet(_derive_config_key()).encrypt(plaintext.encode()).decode()
+
+
+def _decrypt_pass(value: str) -> str:
+    if not value.startswith(_ENC_PREFIX):
+        return value
+    try:
+        return Fernet(_derive_config_key()).decrypt(value[len(_ENC_PREFIX):].encode()).decode()
+    except InvalidToken:
+        return value
+
+
 def load_config(config_file):
     """Carica la configurazione da file JSON, fallback ai default."""
     if os.path.exists(config_file):
         try:
             with open(config_file, "r", encoding="utf-8") as f:
                 saved = json.load(f)
+            if "smtp_pass" in saved:
+                saved["smtp_pass"] = _decrypt_pass(saved["smtp_pass"])
             return {**DEFAULT_CONFIG, **saved}
         except Exception:
             pass
@@ -98,10 +136,14 @@ def load_config(config_file):
 
 
 def save_config(config, config_file):
-    """Salva la configurazione su file JSON."""
+    """Salva la configurazione su file JSON (smtp_pass cifrata)."""
     os.makedirs(os.path.dirname(config_file), exist_ok=True)
+    to_save = dict(config)
+    raw_pass = to_save.get("smtp_pass", "")
+    if raw_pass and not _SMTP_PASS_LOCKED:
+        to_save["smtp_pass"] = _encrypt_pass(raw_pass)
     with open(config_file, "w", encoding="utf-8") as f:
-        json.dump(config, f, indent=4)
+        json.dump(to_save, f, indent=4)
 
 
 # ================= STRIP HTML → TESTO PLAIN =================
