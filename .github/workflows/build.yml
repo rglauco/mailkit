@@ -10,6 +10,8 @@ jobs:
     runs-on: windows-latest
     permissions:
       contents: write
+    env:
+      MAILKIT_SECRET: ${{ secrets.MAILKIT_SECRET }}
 
     steps:
       - name: Checkout
@@ -28,8 +30,6 @@ jobs:
       - name: Generate build secret
         if: env.MAILKIT_SECRET != ''
         run: python build_env.py
-        env:
-          MAILKIT_SECRET: ${{ secrets.MAILKIT_SECRET }}
 
       - name: Build exe
         run: pyinstaller gui.spec
